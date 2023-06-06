@@ -7,3 +7,7 @@
 *.dae
 data/*
 logs/*
+
+env/
+*.npz*
+.vscode/

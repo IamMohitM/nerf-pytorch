@@ -6,6 +6,7 @@ import os, imageio
 ##########  see https://github.com/Fyusion/LLFF for original
 
 def _minify(basedir, factors=[], resolutions=[]):
+    # creates minified versions of the images in the given directory
     needtoload = False
     for r in factors:
         imgdir = os.path.join(basedir, 'images_{}'.format(r))
@@ -60,8 +61,11 @@ def _minify(basedir, factors=[], resolutions=[]):
         
         
 def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
-    
+    #fern has 20 images - so 20 pose information
+    # N x 17
     poses_arr = np.load(os.path.join(basedir, 'poses_bounds.npy'))
+    # camera to world transform + [height, width, focal length]
+    # get first 15 numbers
     poses = poses_arr[:, :-2].reshape([-1, 3, 5]).transpose([1,2,0])
     bds = poses_arr[:, -2:].transpose([1,0])
     
@@ -71,6 +75,7 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     
     sfx = ''
     
+    #identify img directory based on factor and other params - load if required
     if factor is not None:
         sfx = '_{}'.format(factor)
         _minify(basedir, factors=[factor])
@@ -93,21 +98,24 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
         print( imgdir, 'does not exist, returning' )
         return
     
+    #load images
     imgfiles = [os.path.join(imgdir, f) for f in sorted(os.listdir(imgdir)) if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
     if poses.shape[-1] != len(imgfiles):
         print( 'Mismatch between imgs {} and poses {} !!!!'.format(len(imgfiles), poses.shape[-1]) )
         return
     
     sh = imageio.imread(imgfiles[0]).shape
+    #set image shape in the first two rows  last column for all images
     poses[:2, 4, :] = np.array(sh[:2]).reshape([2, 1])
     poses[2, 4, :] = poses[2, 4, :] * 1./factor
+     #divide focal by the factor (images_8 are factor 8 smaller than images)
     
     if not load_imgs:
         return poses, bds
     
     def imread(f):
         if f.endswith('png'):
-            return imageio.imread(f, ignoregamma=True)
+            return imageio.imread(f)
         else:
             return imageio.imread(f)
         
@@ -123,30 +131,34 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     
 
 def normalize(x):
+    # scaling it to have a unit length while preserving its direction
     return x / np.linalg.norm(x)
 
 def viewmatrix(z, up, pos):
-    vec2 = normalize(z)
+    # look at fundamentals of compute graphics - making ortho basis from 2 vectos
+    vec2 = normalize(z) #z is already normalized when llff
     vec1_avg = up
     vec0 = normalize(np.cross(vec1_avg, vec2))
     vec1 = normalize(np.cross(vec2, vec0))
-    m = np.stack([vec0, vec1, vec2, pos], 1)
-    return m
+    m = np.stack([vec0, vec1, vec2, pos], 1) # notice all 3 vectors are perpendicular here
+    return m # 3, 4
 
 def ptstocam(pts, c2w):
     tt = np.matmul(c2w[:3,:3].T, (pts-c2w[:3,3])[...,np.newaxis])[...,0]
     return tt
 
 def poses_avg(poses):
-
+   
+    # height width focal - [images, 3, 5]
     hwf = poses[0, :3, -1:]
-
+    # translate vector mean - translation mean of all - [x_mean, y_mean, z_mean] (not sure if that is the order but same idea)
     center = poses[:, :3, 3].mean(0)
+    #z rotation axis - unit length
     vec2 = normalize(poses[:, :3, 2].sum(0))
-    up = poses[:, :3, 1].sum(0)
+    up = poses[:, :3, 1].sum(0) #y rotation axis - can be anything actually
     c2w = np.concatenate([viewmatrix(vec2, up, center), hwf], 1)
     
-    return c2w
+    return c2w #camera to world
 
 
 
@@ -166,12 +178,14 @@ def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
 def recenter_poses(poses):
 
     poses_ = poses+0
-    bottom = np.reshape([0,0,0,1.], [1,4])
-    c2w = poses_avg(poses)
-    c2w = np.concatenate([c2w[:3,:4], bottom], -2)
+    bottom = np.expand_dims([0,0,0,1.], axis = 0)
+    #! c2w describes the camera orientation and translation in world coordinates
+    c2w = poses_avg(poses) #get camera to world frame
+    c2w = np.concatenate([c2w[:3,:4], bottom], -2) # turn into homogeneous coordinates
     bottom = np.tile(np.reshape(bottom, [1,1,4]), [poses.shape[0],1,1])
-    poses = np.concatenate([poses[:,:3,:4], bottom], -2)
-
+    poses = np.concatenate([poses[:,:3,:4], bottom], -2) #make all poses homogeneous
+    
+    #world 2 camera * poses - poses now in camera frame after the multiplication
     poses = np.linalg.inv(c2w) @ poses
     poses_[:,:3,:4] = poses[:,:3,:4]
     poses = poses_
@@ -241,23 +255,32 @@ def spherify_poses(poses, bds):
     
 
 def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False):
-    
-
+    #! What is bd_factor?
+    # maybe bound factor?
+    # camera to world transform + [height, width, focal length] - poses # bds - bounds (near and far)
     poses, bds, imgs = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     print('Loaded', basedir, bds.min(), bds.max())
     
     # Correct rotation matrix ordering and move variable dim to axis 0
+    # the poses are in -y, x, z [down, right, backwards] format but converted to x, y, z format here 
     poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
+    # group by images - ex - (3, 5, 20) to (20, 3, 5)
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
+
+    #ex - (300, 300, 3, 20) to (20, 300, 300, 3)
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)
     images = imgs
+    # depth - interchange 
     bds = np.moveaxis(bds, -1, 0).astype(np.float32)
     
     # Rescale if bd_factor is provided
+    # (example, 3 x 5 (extrinsic 3 x 4, intrinsic 3 x 1))
+    #translation column is adjusted
     sc = 1. if bd_factor is None else 1./(bds.min() * bd_factor)
     poses[:,:3,3] *= sc
     bds *= sc
     
+    #poses is (imges, 3, 5)
     if recenter:
         poses = recenter_poses(poses)
         
@@ -277,8 +300,8 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         # Find a reasonable "focus depth" for this dataset
         close_depth, inf_depth = bds.min()*.9, bds.max()*5.
         dt = .75
-        mean_dz = 1./(((1.-dt)/close_depth + dt/inf_depth))
-        focal = mean_dz
+        #mean_dz
+        focal = 1./(((1.-dt)/close_depth + dt/inf_depth)) 
 
         # Get radii for spiral path
         shrink_factor = .8

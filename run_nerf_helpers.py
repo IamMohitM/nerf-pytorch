@@ -33,6 +33,7 @@ class Embedder:
         else:
             freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
             
+        # adds sine(2^0*pie*x)
         for freq in freq_bands:
             for p_fn in self.kwargs['periodic_fns']:
                 embed_fns.append(lambda x, p_fn=p_fn, freq=freq : p_fn(x * freq))
@@ -154,6 +155,8 @@ def get_rays(H, W, K, c2w):
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
+
+    #direction vectors
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
@@ -164,9 +167,15 @@ def get_rays(H, W, K, c2w):
 
 def get_rays_np(H, W, K, c2w):
     i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
+    # K[0][2] and K[1][2] are the principal points [cx, cy] - center of the image
+    #k[0][0] and k[1][1] are focal length - dividing by focal length normalizes the rays
+    # z direction is negative because the camera is looking in the negative z direction
+    # the substraction is necessary to ge t direction from center of the image to the pixel
     dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
-    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = np.matmul(c2w[:3, :3], dirs.reshape(-1, 3).transpose()).transpose().reshape(dirs.shape)
+    # rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = np.broadcast_to(c2w[:3,-1], np.shape(rays_d))
     return rays_o, rays_d
@@ -174,6 +183,7 @@ def get_rays_np(H, W, K, c2w):
 
 def ndc_rays(H, W, focal, near, rays_o, rays_d):
     # Shift ray origins to near plane
+    #only shift in z direction
     t = -(near + rays_o[...,2]) / rays_d[...,2]
     rays_o = rays_o + t[...,None] * rays_d
     

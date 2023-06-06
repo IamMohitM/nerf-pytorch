@@ -137,6 +137,21 @@ py.test
 > A neural radiance field is a simple fully connected network (weights are ~5MB) trained to reproduce input views of a single scene using a rendering loss. The network directly maps from spatial location and viewing direction (5D input) to color and opacity (4D output), acting as the "volume" so we can use volume rendering to differentiably render new views
 
 
+## File Format
+
+### poses_bound.npy
+
+from [LLFF](https://github.com/fyusion/llff#using-your-own-poses-without-running-colmap)
+Numpy array with size N x 17
+- N - number of images
+17 - 3 * 5 pose matrix + 2 depth values that bound the closest and farthest scene content from point of view
+
+
+### Rotation Matrix Ordering
+
+The rotation matrix has order x,y, z. We first reorder to y, -x, z.
+
+
 ## Citation
 Kudos to the authors for their amazing results:
 ```
